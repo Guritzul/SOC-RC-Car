@@ -22,7 +22,7 @@ void loop()
   data.swLeft = joystickLeftPressed();
   data.swRight = joystickRightPressed();
 
-  buzzerUpdate(data.buzz);
+  buzzerUpdate(data.buzz); // ← înainte de send
 
   bool ok = antennaSend(data);
 
