@@ -16,6 +16,7 @@
 #include "buzzer.h"
 #include "leduri.h"
 #include "radio_rx.h"
+#include "steering.h"
 
 static const int INTERVAL_SENZORI = 100;
 static unsigned long _ultimaCitire = 0;
@@ -37,6 +38,7 @@ void setup() {
     Buzzer::init();
     Leduri::init();
     RadioRx::init();
+    Steering::init();
 
     Serial.println("=== Sistem gata ===");
 }
@@ -47,6 +49,10 @@ void loop() {
     Payload dateNoi;
     if (RadioRx::receive(dateNoi)) {
         _dateRadio = dateNoi;
+
+        // Actualizare instanta unghi servodirectie (Graupner C 577) pe registri Timer 1
+        Steering::setAngle(_dateRadio.steering);
+
         Serial.print("[Radio] Pachet primit | THR: ");
         Serial.print(_dateRadio.throttle);
         Serial.print(" | STR: ");

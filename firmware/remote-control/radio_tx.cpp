@@ -17,6 +17,8 @@
 #define NRF_REG_TX_ADDR     0x10
 #define NRF_REG_RX_PW_P0    0x11
 #define NRF_REG_FIFO_STATUS 0x17
+#define NRF_REG_DYNPD       0x1C
+#define NRF_REG_FEATURE     0x1D
 
 #define NRF_CMD_R_REGISTER    0x00
 #define NRF_CMD_W_REGISTER    0x20
@@ -35,6 +37,8 @@ public:
     virtual void init() = 0;
     virtual void setTxMode(const uint8_t *txAddress) = 0;
     virtual bool sendPayload(const void *buf, uint8_t size) = 0;
+    virtual bool performSelfTest() = 0;
+    virtual uint8_t readReg(uint8_t reg) = 0;
 };
 
 // ============================================================
@@ -126,13 +130,18 @@ public:
         // 3. Set address width to 5 bytes (0x03)
         writeRegister(NRF_REG_SETUP_AW, 0x03);
 
-        // 4. Set Retries: 1000us delay (0x3 in high nibble), 3 retries (0x3 in low nibble) -> 0x33
-        writeRegister(NRF_REG_SETUP_RETR, 0x33);
+        // 4. Set Retries: 500us delay (0x1 in high nibble), 15 retries (0xF in low nibble) -> 0x1F
+        //    Note: retry delay must be > payload_size * 8 / data_rate to avoid collision with ACK
+        writeRegister(NRF_REG_SETUP_RETR, 0x1F);
 
-        // 5. Set RF channel to 76 (0x4C) - matching default Arduino RF24 library channel
-        writeRegister(NRF_REG_RF_CH, 76);
+        // 5. Set RF channel to 115 (2.515 GHz - completely outside Wi-Fi spectrum)
+        writeRegister(NRF_REG_RF_CH, 115);
 
-        // 6. Set RF_SETUP: 1 Mbps data rate, 0 dBm power (0x06) for strong range
+        // 6. Set RF_SETUP: 1 Mbps, -18 dBm PA level
+        //    Bits: RF_DR_HIGH(3)=0, RF_DR_LOW(5)=0 -> 1 Mbps
+        //    PA_LEVEL bits [2:1] = 00 -> -18 dBm (lowest power, safe for Nano)
+        //    NOTE: 0x00 on nRF24L01+ clones sets 250kbps (different bit layout than original)
+        //    Correct 1Mbps value is 0x06: RF_DR=1Mbps, LNA_HCURR=1 (bit 0), PA=-18dBm
         writeRegister(NRF_REG_RF_SETUP, 0x06);
 
         // 7. Write transmitter address (5 bytes)
@@ -141,7 +150,14 @@ public:
         // 8. Write receiver address on Pipe 0 (must match TX address for Auto-Ack)
         writeRegisterBuf(NRF_REG_RX_ADDR_P0, txAddress, 5);
 
-        // 9. Configure CONFIG register:
+        // 9. Configure Pipe 0 payload width (required for Auto-Ack packet validation on Pipe 0)
+        writeRegister(NRF_REG_RX_PW_P0, 7); // Payload size is 7 bytes (sizeof(Payload))
+
+        // Explicitly disable dynamic payload length and features (required for absolute clone compatibility)
+        writeRegister(NRF_REG_DYNPD, 0x00);
+        writeRegister(NRF_REG_FEATURE, 0x00);
+
+        // 10. Configure CONFIG register:
         //    - EN_CRC = 1 (CRC enabled)
         //    - CRCO = 1 (2-byte CRC)
         //    - PWR_UP = 1 (Power up transceiver)
@@ -152,8 +168,8 @@ public:
         // Clear interrupt flags in STATUS again
         writeRegister(NRF_REG_STATUS, 0x70);
 
-        // Allow nRF24 to transition to Power Up state
-        delayMicroseconds(150);
+        // Allow nRF24 to transition from PowerDown -> Standby-I (datasheet: min 1.5ms, safe = 5ms)
+        delay(5);
     }
 
     bool sendPayload(const void *buf, uint8_t size) override
@@ -176,14 +192,20 @@ public:
         delayMicroseconds(15);
         _ce.writeLow();
 
-        // 4. Poll STATUS register until either TX_DS (successful ACK) or MAX_RT (retry limit exceeded) is set
+        // 4. Poll STATUS register until either TX_DS (successful ACK) or MAX_RT (retry limit exceeded) is set, with a safety timeout
         uint8_t status = 0;
+        uint32_t startTime = millis();
         while (true)
         {
             status = readRegister(NRF_REG_STATUS);
             // Bit 5 is TX_DS, Bit 4 is MAX_RT
             if (status & ((1 << 5) | (1 << 4)))
             {
+                break;
+            }
+            if (millis() - startTime > 100) // 100ms safety timeout
+            {
+                status = 0x10; // Pretend it failed (MAX_RT) to clear and return
                 break;
             }
         }
@@ -199,6 +221,18 @@ public:
         }
 
         return true; // Successfully sent and ACK received
+    }
+
+    bool performSelfTest() override
+    {
+        writeRegister(NRF_REG_RF_CH, 115);
+        uint8_t val = readRegister(NRF_REG_RF_CH);
+        return val == 115;
+    }
+
+    uint8_t readReg(uint8_t reg) override
+    {
+        return readRegister(reg);
     }
 };
 
@@ -221,7 +255,31 @@ namespace RadioTx
     {
         nrf24.init();
         nrf24.setTxMode(txAddress);
-        Serial.println("[RadioTx] Register-level initialized. Ready to transmit on '00001'");
+
+        // Self-test: verify SPI communication by writing and reading back RF channel
+        bool spiOk = nrf24.performSelfTest();
+        if (spiOk)
+        {
+            Serial.println("[RadioTx] SPI OK - modulul nRF24L01 raspunde.");
+        }
+        else
+        {
+            Serial.println("[RadioTx] EROARE SPI! nRF24L01 nu raspunde. Verificati cablajul SPI si alimentarea 3.3V!");
+        }
+
+        // Readback diagnostic: afiseaza valorile reale din registrii RF pentru depanare
+        uint8_t rfSetup = nrf24.readReg(NRF_REG_RF_SETUP);
+        uint8_t rfCh    = nrf24.readReg(NRF_REG_RF_CH);
+        uint8_t config  = nrf24.readReg(NRF_REG_CONFIG);
+        uint8_t status  = nrf24.readReg(NRF_REG_STATUS);
+
+        Serial.print("[RadioTx] RF_SETUP=0x"); Serial.print(rfSetup, HEX);
+        Serial.print(" RF_CH=");              Serial.print(rfCh);
+        Serial.print(" CONFIG=0x");           Serial.print(config, HEX);
+        Serial.print(" STATUS=0x");           Serial.println(status, HEX);
+        Serial.println("[RadioTx] Asteptat: RF_SETUP=0x06  RF_CH=115  CONFIG=0x0E  STATUS=0x0E");
+
+        Serial.println("[RadioTx] Gata de transmisie pe adresa '00001'.");
     }
 
     bool send(const Payload &data)

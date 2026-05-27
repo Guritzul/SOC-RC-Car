@@ -1,6 +1,9 @@
 #include "radio_rx.h"
 #include <Arduino.h>
 
+// ============================================================
+//  Constante nRF24L01 (Regiștri și Comenzi)
+// ============================================================
 #define NRF_REG_CONFIG      0x00
 #define NRF_REG_EN_AA       0x01
 #define NRF_REG_EN_RXADDR   0x02
@@ -9,9 +12,11 @@
 #define NRF_REG_RF_CH       0x05
 #define NRF_REG_RF_SETUP    0x06
 #define NRF_REG_STATUS      0x07
-#define NRF_REG_RX_ADDR_P1  0x0B
-#define NRF_REG_RX_PW_P1    0x12
+#define NRF_REG_RX_ADDR_P0  0x0A
+#define NRF_REG_RX_PW_P0    0x11
 #define NRF_REG_FIFO_STATUS 0x17
+#define NRF_REG_DYNPD       0x1C
+#define NRF_REG_FEATURE     0x1D
 
 #define NRF_CMD_R_REGISTER    0x00
 #define NRF_CMD_W_REGISTER    0x20
@@ -54,6 +59,8 @@ public:
     virtual void setRxMode(const uint8_t *rxAddress, uint8_t payloadSize) = 0;
     virtual bool isDataAvailable() = 0;
     virtual void readPayload(void *buf, uint8_t size) = 0;
+    virtual bool performSelfTest() = 0;
+    virtual uint8_t readReg(uint8_t reg) = 0;
 };
 
 // ============================================================
@@ -105,7 +112,7 @@ public:
         // Așteaptă finalizarea transmisiei (verifică bitul SPIF din SPI Status Register)
         while (!(SPSR & (1 << SPIF)))
         {
-            // Buclă de așteptare non-blocking pentru alte hardware-uri, dar directă
+            // Buclă de așteptare
         }
 
         // Returnează datele recepționate în timpul transferului
@@ -219,28 +226,34 @@ public:
         // Punem CE în LOW înainte de a modifica configurațiile
         _ce.writeLow();
 
-        // 1. Activare Auto-Acknowledgment pe Pipe 1
-        writeRegister(NRF_REG_EN_AA, 0x02);
+        // 1. Activare Auto-Acknowledgment pe Pipe 0 (identic cu TX - necesar pentru ACK automat)
+        writeRegister(NRF_REG_EN_AA, 0x01);
 
-        // 2. Activare receptor pe Pipe 1
-        writeRegister(NRF_REG_EN_RXADDR, 0x02);
+        // 2. Activare receptor pe Pipe 0 (trebuie sa fie acelasi pipe pe care TX-ul transmite)
+        writeRegister(NRF_REG_EN_RXADDR, 0x01);
 
         // 3. Setează lungimea adresei la 5 bytes (0x03 în SETUP_AW)
         writeRegister(NRF_REG_SETUP_AW, 0x03);
 
-        // 4. Setează canalul RF la 76 (0x4C) - identic cu cel din biblioteca RF24 implicită
-        writeRegister(NRF_REG_RF_CH, 76);
+        // 4. Setează canalul RF la 115 (2.515 GHz - complet în afara benzii Wi-Fi pentru zero interferențe)
+        writeRegister(NRF_REG_RF_CH, 115);
 
         // 5. Configurare RF_SETUP:
-        //    - Rate = 1 Mbps (RF_DR_LOW = 0, RF_DR_HIGH = 0)
-        //    - Putere = 0dBm (RF_PWR = 11, adică 0x06 în RF_SETUP pentru amplificare maximă a ACK-ului)
+        //    - Rate = 1 Mbps (RF_DR_LOW=0, RF_DR_HIGH=0)
+        //    - LNA_HCURR = 1 (bit 0) - necesar pe clone nRF24L01+
+        //    NOTA: 0x00 pe clone nRF24L01+ activeaza 250kbps (layout de biti diferit fata de original)
+        //    Valoarea corecta pentru 1Mbps este 0x06
         writeRegister(NRF_REG_RF_SETUP, 0x06);
 
-        // 6. Configurare adresă de recepție pentru Pipe 1 (5 bytes)
-        writeRegisterBuf(NRF_REG_RX_ADDR_P1, rxAddress, 5);
+        // 6. Configurare adresa de receptie pe Pipe 0 (trebuie sa fie IDENTICA cu TX_ADDR de pe transmitator)
+        writeRegisterBuf(NRF_REG_RX_ADDR_P0, rxAddress, 5);
 
-        // 7. Setează lățimea payload-ului static pentru Pipe 1
-        writeRegister(NRF_REG_RX_PW_P1, payloadSize);
+        // 7. Seteaza latimea payload-ului static pentru Pipe 0
+        writeRegister(NRF_REG_RX_PW_P0, payloadSize);
+
+        // Dezactivare explicita a lungimii dinamice a payload-ului si a functiilor speciale
+        writeRegister(NRF_REG_DYNPD, 0x00);
+        writeRegister(NRF_REG_FEATURE, 0x00);
 
         // 8. Configurare registru CONFIG:
         //    - EN_CRC = 1, CRCO = 1 (CRC activ, 2 bytes - identic cu TX)
@@ -249,17 +262,17 @@ public:
         //    Valoare: 0x0F
         writeRegister(NRF_REG_CONFIG, 0x0F);
 
-        // Șterge din nou flag-urile din STATUS
+        // Sterge din nou flag-urile din STATUS
         writeRegister(NRF_REG_STATUS, 0x70);
 
-        // Golește FIFO RX pentru a începe curat
+        // Goleste FIFO RX pentru a incepe curat
         flushRx();
 
-        // 9. Ridică CE în HIGH pentru a începe ascultarea în mod RX activ
+        // 9. Ridica CE in HIGH pentru a incepe ascultarea in mod RX activ
         _ce.writeHigh();
 
-        // Așteaptă timpul necesar pentru tranziția de pornire a receptorului (~130 us conform datasheet)
-        delayMicroseconds(150);
+        // Asteapta stabilizarea receptorului (Standby-I -> RX Mode: min 130us, marja siguranta 200us)
+        delayMicroseconds(200);
     }
 
     bool isDataAvailable() override
@@ -298,6 +311,18 @@ public:
         // Șterge flag-ul de întrerupere RX_DR prin scrierea valorii 1 pe poziția bitului 6 din STATUS
         writeRegister(NRF_REG_STATUS, 0x40);
     }
+
+    bool performSelfTest() override
+    {
+        writeRegister(NRF_REG_RF_CH, 115);
+        uint8_t val = readRegister(NRF_REG_RF_CH);
+        return val == 115;
+    }
+
+    uint8_t readReg(uint8_t reg) override
+    {
+        return readRegister(reg);
+    }
 };
 
 // ============================================================
@@ -306,8 +331,8 @@ public:
 
 // Instanțiem modulele de nivel jos ca variabile statice
 static Atm328Spi spiDriver;
-// Pinul CE pe PB1 (Pinul Digital 9 de pe Arduino Uno/Nano)
-static Atm328Gpio cePin(&DDRB, &PORTB, PORTB1);
+// Pinul CE pe PD7 (Pinul Digital 7 de pe Arduino Uno/Nano)
+static Atm328Gpio cePin(&DDRD, &PORTD, PORTD7);
 
 // Injectăm dependențele (SPI și CE) în driverul nRF24L01
 static Nrf24RegisterDriver nrf24(spiDriver, cePin);
@@ -322,13 +347,35 @@ namespace RadioRx
 {
     void init()
     {
-        // 1. Inițializează driverul nRF24L01 (configurează SPI, pinii de control și FIFO-urile)
+        // 1. Initializeaza driverul nRF24L01 (configureaza SPI, pinii de control si FIFO-urile)
         nrf24.init();
 
-        // 2. Trece nRF24L01 în mod recepție ascultând pe adresa specificată cu mărimea Payload-ului adecvată
+        // 2. Self-test SPI INAINTE de setRxMode (CE=LOW = Standby-I = stare sigura pentru registri)
+        if (nrf24.performSelfTest())
+        {
+            Serial.println("[RadioRx] SPI OK - modulul nRF24L01 raspunde pe masina.");
+        }
+        else
+        {
+            Serial.println("[RadioRx] EROARE SPI! nRF24L01 nu raspunde. Verificati cablajul SPI si alimentarea 3.3V!");
+        }
+
+        // 3. Trece nRF24L01 in mod receptie ascultand pe adresa specificata
         nrf24.setRxMode(rxAddress, sizeof(Payload));
 
-        Serial.println("[RadioRx] Initializat pe registri. Asculta pe adresa '00001'");
+        // 4. Readback diagnostic pentru depanare (CE=HIGH acum, dar citirile sunt ok)
+        uint8_t rfSetup = nrf24.readReg(NRF_REG_RF_SETUP);
+        uint8_t rfCh    = nrf24.readReg(NRF_REG_RF_CH);
+        uint8_t config  = nrf24.readReg(NRF_REG_CONFIG);
+        uint8_t status  = nrf24.readReg(NRF_REG_STATUS);
+
+        Serial.print("[RadioRx] RF_SETUP=0x"); Serial.print(rfSetup, HEX);
+        Serial.print(" RF_CH=");              Serial.print(rfCh);
+        Serial.print(" CONFIG=0x");           Serial.print(config, HEX);
+        Serial.print(" STATUS=0x");           Serial.println(status, HEX);
+        Serial.println("[RadioRx] Asteptat: RF_SETUP=0x06  RF_CH=115  CONFIG=0x0F  STATUS=0x0E");
+
+        Serial.println("[RadioRx] Initializat pe registri. Asculta pe adresa '00001'.");
     }
 
     bool receive(Payload &outPayload)

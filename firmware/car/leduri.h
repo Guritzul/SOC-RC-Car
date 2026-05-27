@@ -3,8 +3,8 @@
 // ============================================================
 //  leduri.h
 //  Control LED-uri masina RC:
-//    - Far fata    (on/off)
-//    - Stop spate  (on/off + luminozitate frana)
+//    - Far fata    -> A1  (PC1, digital on/off)
+//    - Stop spate  -> Pin 6 (PD6/OC0A, PWM Timer 0)
 // ============================================================
 
 namespace Leduri {
