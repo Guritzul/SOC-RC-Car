@@ -20,14 +20,18 @@ class Atm328Timer1Steering : public ISteering
 public:
     void init() override
     {
-        // 1. Setează pinul PB1 (Digital 9 / OC1A) ca OUTPUT
-        DDRB |= (1 << DDB1);
+        // 1. Setează pinul PB1 (Digital 9 / OC1A) ca OUTPUT (servo direcție)
+        //    PB2 (Digital 10 / OC1B) este configurat separat de Esc::init()
+        DDRB |= (1 << DDB1) | (1 << DDB2);
 
         // 2. Configurare Timer 1 (16-bit) pentru servomotor (50Hz / perioadă de 20ms):
+        //    Timer 1 este partajat între Steering (OC1A/D9) şi ESC (OC1B/D10)
+        //
         //    - TCCR1A:
         //        - COM1A1 = 1 (Curăță pinul OC1A la comparare egală cu OCR1A, pune pe HIGH la capătul de jos)
+        //        - COM1B1 = 1 (Activat pentru ESC pe OC1B/D10 - evită resetarea accidentală la reinit)
         //        - WGM11  = 1 (Face parte din modul 14 - Fast PWM cu ICR1 ca TOP)
-        TCCR1A = (1 << COM1A1) | (1 << WGM11);
+        TCCR1A = (1 << COM1A1) | (1 << COM1B1) | (1 << WGM11);
 
         //    - TCCR1B:
         //        - WGM13 = 1, WGM12 = 1 (Mod 14 Fast PWM - ICR1 ca TOP)
@@ -36,16 +40,19 @@ public:
 
         //    - ICR1 (Valoare TOP):
         //        - Perioada cerută de servomotor: 20 ms
-        //        - Număr tick-uri = 20 ms / 0.5 µs = 40.000 de pași
-        //        - Setează ICR1 la 39999 (deoarece numărarea pornește de la 0)
+        //        - Număr tick-uri = 20 ms / 0.5 µs = 40.000 de paşi
+        //        - Setează ICR1 la 39999 (deoarece numărarea porneşte de la 0)
         ICR1 = 39999;
 
         //    - OCR1A (Valoare implicită inițială pe centru / neutru):
         //        - 1.5 ms = 1500 µs
-        //        - Număr tick-uri = 1500 µs / 0.5 µs = 3000 de pași
+        //        - Număr tick-uri = 1500 µs / 0.5 µs = 3000 de paşi
         OCR1A = 3000;
 
-        Serial.println("[Steering] Initializat cu succes pe registri (Timer 1, Pin 9 / PB1, Freq=50Hz)");
+        //    - OCR1B setat la neutru (ESC stop) - va fi setat definitiv de Esc::init()
+        OCR1B = 3000;
+
+        Serial.println("[Steering] Initializat cu succes pe registri (Timer 1 OC1A+OC1B, Pin D9/PB1, Freq=50Hz)");
     }
 
     void setAngle(int rawValue) override

@@ -3,6 +3,7 @@
 // ============================================================
 //  buzzer.h
 //  Alerta sonora in functie de proximitate obstacol
+//    (+) -> A3 (PC3)
 // ============================================================
 
 namespace Buzzer {

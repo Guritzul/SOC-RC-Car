@@ -19,7 +19,7 @@ public:
     virtual bool read() = 0;
 };
 
-// Interface for hardware SPI communication
+// Interface for hardware SPI communication with external CSN management
 class ISpi
 {
 public:
@@ -85,46 +85,67 @@ public:
     }
 };
 
-// Concrete SPI driver utilizing ATmega328P hardware SPI peripheral registers
-// Fixed hardware pins: SS/CSN (PB2), MOSI (PB3), MISO (PB4), SCK (PB5)
+// ============================================================
+//  Concrete SPI driver - ATmega328P hardware SPI peripheral
+//  Hardware SPI pins (fixed by silicon):
+//    MOSI -> PB3 (D11)
+//    MISO -> PB4 (D12)
+//    SCK  -> PB5 (D13)
+//    SS   -> PB2 (D10) kept HIGH to prevent slave-mode (not used as CSN here)
+//  CSN is managed externally via an IGpio instance (injected in constructor)
+//  CE   -> PD7 (D7)  - managed externally via IGpio
+//  CSN  -> PB0 (D8)  - managed externally via IGpio
+// ============================================================
 class Atm328Spi : public ISpi
 {
+private:
+    IGpio &_csn;    // External CSN pin managed via GPIO
+
 public:
+    explicit Atm328Spi(IGpio &csn) : _csn(csn) {}
+
     void init() override
     {
-        // 1. Set SS (PB2), MOSI (PB3), SCK (PB5) as OUTPUT
-        DDRB |= (1 << DDB2) | (1 << DDB3) | (1 << DDB5);
+        // 1. Set MOSI (PB3), SCK (PB5) as OUTPUT
+        DDRB |= (1 << DDB3) | (1 << DDB5);
 
         // 2. Set MISO (PB4) as INPUT
         DDRB &= ~(1 << DDB4);
 
-        // 3. Ensure SS/CSN starts HIGH (deselect)
-        PORTB |= (1 << PORTB2);
+        // 3. Keep SS (PB2) as OUTPUT and HIGH at all times
+        //    If SS goes LOW while in master mode, ATmega may switch to slave mode
+        //    and break the SPI peripheral. CSN is handled separately on PB0 (D8).
+        DDRB |= (1 << DDB2);
+        PORTB |= (1 << PORTB2);    // SS always HIGH
 
         // 4. Configure SPI Control Register (SPCR):
         //    - SPE = 1 (SPI Enable)
         //    - MSTR = 1 (Master mode)
-        //    - SPI Speed: F_CPU / 4 = 4 MHz (on 16 MHz ATmega328P, SPR1/0 = 00, SPI2X in SPSR = 0)
+        //    - SPI Speed: F_CPU / 4 = 4 MHz (on 16 MHz ATmega328P, SPR1/0 = 00, SPI2X = 0)
         //    - Mode 0: CPOL = 0, CPHA = 0 (Required by nRF24L01)
         SPCR = (1 << SPE) | (1 << MSTR);
         SPSR &= ~(1 << SPI2X);
+
+        // 5. Initialize CSN pin (external, on PB0/D8) - starts HIGH (deselected)
+        _csn.initOutput();
+        _csn.writeHigh();
     }
 
     void select() override
     {
-        // Drive CSN (PB2) LOW (active)
-        PORTB &= ~(1 << PORTB2);
+        // Drive CSN (PB0/D8) LOW (active)
+        _csn.writeLow();
     }
 
     void deselect() override
     {
-        // Drive CSN (PB2) HIGH (inactive)
-        PORTB |= (1 << PORTB2);
+        // Drive CSN (PB0/D8) HIGH (inactive)
+        _csn.writeHigh();
     }
 
     uint8_t transfer(uint8_t data) override
     {
-        // Load data into standard SPI Data Register (SPDR)
+        // Load data into SPI Data Register (SPDR)
         SPDR = data;
 
         // Wait until transmission completes (poll SPI Interrupt Flag - SPIF)

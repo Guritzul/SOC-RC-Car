@@ -68,59 +68,76 @@ public:
 // ============================================================
 
 // Clasa concreta pentru SPI pe registri ATmega328P
-// Pini hardware ficsi: SS/CSN (PB2/D10), MOSI (PB3/D11), MISO (PB4/D12), SCK (PB5/D13)
+// Pini hardware SPI (ficsi de silicon): MOSI (PB3/D11), MISO (PB4/D12), SCK (PB5/D13)
+// SS hardware (PB2/D10) - tinut permanent HIGH (elibereaza OC1B pentru ESC)
+// CSN nRF24L01 -> PB0 (D8) - gestionat extern prin IGpio injectat
 class Atm328Spi : public ISpi
 {
+private:
+    IGpio &_csn;  // CSN extern pe PB0 (D8)
+
 public:
+    explicit Atm328Spi(IGpio &csn) : _csn(csn) {}
+
     void init() override
     {
-        // 1. Setează SS (PB2), MOSI (PB3), SCK (PB5) ca OUTPUT
-        DDRB |= (1 << DDB2) | (1 << DDB3) | (1 << DDB5);
+        // 1. Seteaza MOSI (PB3), SCK (PB5) ca OUTPUT
+        DDRB |= (1 << DDB3) | (1 << DDB5);
 
-        // 2. Setează MISO (PB4) ca INPUT
+        // 2. Seteaza MISO (PB4) ca INPUT
         DDRB &= ~(1 << DDB4);
 
-        // 3. Asigură-te că SS/CSN pornește HIGH (deselectat)
-        PORTB |= (1 << PORTB2);
+        // 3. SS hardware (PB2/D10) tinut permanent HIGH
+        //    Daca SS ar cobori in LOW in modul Master, ATmega ar comuta in mod Slave
+        //    si ar opri perifericul SPI. PB2/OC1B este acum folosit de ESC (Timer 1).
+        //    SS hardware NU trebuie sa fie controlat de ESC - ESC controleaza doar OCR1B.
+        //    Pinul fizic PB2 este output Timer1 OC1B (PWM). PORTB2 e ignorat de Timer.
+        //    Totusi setam DDRB2 si PORTB2 HIGH pentru siguranta initializarii SPI.
+        DDRB |= (1 << DDB2);
+        PORTB |= (1 << PORTB2);  // SS permanent HIGH
 
-        // 4. Inițializează SPI Control Register (SPCR):
+        // 4. Configureaza SPI Control Register (SPCR):
         //    - SPE = 1 (SPI Enable)
         //    - MSTR = 1 (Master select)
-        //    - SPR1/0 = 00, SPI2X in SPSR = 0 -> Viteză SPI fosc/4 (4 MHz pe ATmega328P la 16 MHz)
         //    - CPOL = 0, CPHA = 0 (SPI Mode 0 - cerut de nRF24L01)
+        //    - Viteza SPI fosc/4 = 4 MHz (SPR1/0 = 00, SPI2X = 0)
         SPCR = (1 << SPE) | (1 << MSTR);
         SPSR &= ~(1 << SPI2X);
+
+        // 5. Initializeaza CSN extern (PB0/D8) - incepe HIGH (deselectat)
+        _csn.initOutput();
+        _csn.writeHigh();
     }
 
     void select() override
     {
-        // Pune CSN (PB2) în LOW (activare)
-        PORTB &= ~(1 << PORTB2);
+        // Pune CSN (PB0/D8) in LOW (activare)
+        _csn.writeLow();
     }
 
     void deselect() override
     {
-        // Pune CSN (PB2) în HIGH (dezactivare)
-        PORTB |= (1 << PORTB2);
+        // Pune CSN (PB0/D8) in HIGH (dezactivare)
+        _csn.writeHigh();
     }
 
     uint8_t transfer(uint8_t data) override
     {
-        // Scrie datele în SPI Data Register
+        // Scrie datele in SPI Data Register
         SPDR = data;
 
-        // Așteaptă finalizarea transmisiei (verifică bitul SPIF din SPI Status Register)
+        // Asteapta finalizarea transmisiei (verifica bitul SPIF din SPI Status Register)
         while (!(SPSR & (1 << SPIF)))
         {
-            // Buclă de așteptare
+            // Bucla de asteptare
         }
 
-        // Returnează datele recepționate în timpul transferului
+        // Returneaza datele receptionate in timpul transferului
         return SPDR;
     }
 };
 
-// Clasa concretă pentru GPIO pe registri ATmega328P
+// Clasa concreta pentru GPIO pe registri ATmega328P (suport initOutput + writeHigh/Low)
 class Atm328Gpio : public IGpio
 {
 private:
@@ -326,15 +343,21 @@ public:
 };
 
 // ============================================================
-//  Instanțierea Componentelor și Cablarea Statică (SOLID - DIP)
+//  Instantierea Componentelor si Cablarea Statica (SOLID - DIP)
 // ============================================================
 
-// Instanțiem modulele de nivel jos ca variabile statice
-static Atm328Spi spiDriver;
-// Pinul CE pe PD7 (Pinul Digital 7 de pe Arduino Uno/Nano)
+// CSN: PB0 (D8) - mutat de pe D10 (PB2/OC1B) pentru a elibera OC1B pentru ESC
+// SS hardware (PB2/D10) - tinut permanent HIGH de Atm328Spi::init()
+static Atm328Gpio csnPin(&DDRB, &PORTB, PORTB0);
+
+// SPI cu CSN extern injectat
+static Atm328Spi spiDriver(csnPin);
+
+// CE: D7 = PD7 (bit 7 din Port D)
 static Atm328Gpio cePin(&DDRD, &PORTD, PORTD7);
 
-// Injectăm dependențele (SPI și CE) în driverul nRF24L01
+// Injectam dependentele (SPI si CE) in driverul nRF24L01
+// Pini SPI hardware: MOSI=D11(PB3), MISO=D12(PB4), SCK=D13(PB5), CSN=D8(PB0), CE=D7(PD7)
 static Nrf24RegisterDriver nrf24(spiDriver, cePin);
 
 // Adresa de recepție "00001" corespunzătoare celei configurate pe transmițător (TX)
@@ -384,6 +407,7 @@ namespace RadioRx
         Serial.println(" bytes");
 
         Serial.println("[RadioRx] Initializat pe registri. Asculta pe adresa '00001'.");
+        Serial.println("[RadioRx] Pini: MOSI=D11(PB3) MISO=D12(PB4) SCK=D13(PB5) CE=D7(PD7) CSN=D8(PB0) [D10/OC1B=ESC]");
     }
 
     bool receive(Payload &outPayload)

@@ -3,18 +3,21 @@
 //  Alerta sonora in functie de proximitate obstacol
 //
 //  Conexiuni:
-//    (+) -> Pin 8
+//    (+) -> A3 (PC3)
 //    (-) -> GND
 // ============================================================
 
-#include "Arduino.h"
+#include <avr/io.h>
+#include "Arduino.h"    // necesar pentru tone(), noTone(), millis()
 #include "buzzer.h"
 
-static const int PIN_BUZZER = 8;
+// --- Pin Buzzer: A3 = PC3 = Arduino analog pin 3 ---
+// tone() / noTone() folosesc numarul pinului Arduino
+static const int PIN_BUZZER = A3;   // A3 = pin analog 3 (PC3)
 
-// Timpi pentru bip non-blocking
-static unsigned long _ultimulBip    = 0;
-static bool          _buzzerActiv   = false;
+// --- Timpi pentru bip non-blocking ---
+static unsigned long _ultimulBip  = 0;
+static bool          _buzzerActiv = false;
 
 // Intervale bip (ms)
 static const int INTERVAL_PERICOL = 150;   // bip rapid
@@ -29,9 +32,15 @@ static const int FREQ_ATENTIE = 600;
 namespace Buzzer {
 
     void init() {
-        pinMode(PIN_BUZZER, OUTPUT);
+        // PC3 (A3) -> OUTPUT pe registri
+        DDRC |= (1 << DDC3);
+        // Initial LOW (buzzer stins)
+        PORTC &= ~(1 << PC3);
+
         noTone(PIN_BUZZER);
-        Serial.println("[Buzzer] initializat (Pin=8)");
+        _buzzerActiv = false;
+
+        Serial.println("[Buzzer] initializat pe registri (Pin=A3/PC3)");
     }
 
     void liniste() {
