@@ -1,21 +1,30 @@
 #include "buzzer.h"
 #include <Arduino.h>
 
-void buzzerInit()
+Buzzer::Buzzer(IGpio &buttonGpio, IGpio &buzzerGpio, uint8_t buzzerPinNum)
+    : _buttonGpio(buttonGpio), _buzzerGpio(buzzerGpio), _buzzerPinNum(buzzerPinNum)
 {
-    pinMode(BTN_BUZZ, INPUT_PULLUP);
-    pinMode(BUZZER, OUTPUT);
 }
 
-bool buzzerButtonPressed()
+void Buzzer::init()
 {
-    return !digitalRead(BTN_BUZZ);
+    _buttonGpio.initInputPullup();
+    _buzzerGpio.initOutput();
 }
 
-void buzzerUpdate(bool active)
+bool Buzzer::isButtonPressed()
+{
+    return !_buttonGpio.read(); // Button is active LOW due to pull-up
+}
+
+void Buzzer::update(bool active)
 {
     if (active)
-        tone(BUZZER, 1000);
+    {
+        tone(_buzzerPinNum, 1000);
+    }
     else
-        noTone(BUZZER);
+    {
+        noTone(_buzzerPinNum);
+    }
 }
