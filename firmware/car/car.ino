@@ -19,18 +19,24 @@
 #include "steering.h"
 
 static const int INTERVAL_SENZORI = 100;
+static const unsigned long RX_TIMEOUT = 500;
 static unsigned long _ultimaCitire = 0;
+static unsigned long _ultimaRx = 0;
+static bool _rxActive = false;
 
-static float distFata  = 999.0;
+static float distFata = 999.0;
 static float distSpate = 999.0;
 
 // Starea curenta a comenzilor radio (initilizata cu pozitii neutre)
 static Payload _dateRadio = {512, 512, false, false, false};
 
 // ============================================================
-void setup() {
+void setup()
+{
     Serial.begin(9600);
     Serial.println("=== Masina RC - pornire sistem ===");
+    pinMode(LED_BUILTIN, OUTPUT);
+    digitalWrite(LED_BUILTIN, LOW);
 
     SenzorFata::init();
     SenzorSpate::init();
@@ -44,11 +50,24 @@ void setup() {
 }
 
 // ============================================================
-void loop() {
+void loop()
+{
+    unsigned long acum = millis();
+
     // --- Citire Radio non-blocking (frecventa maxima de interogare) ---
     Payload dateNoi;
-    if (RadioRx::receive(dateNoi)) {
+    if (RadioRx::receive(dateNoi))
+    {
         _dateRadio = dateNoi;
+        _ultimaRx = acum;
+
+        if (!_rxActive)
+        {
+            Serial.println("[Radio] Conexiune stabilita!");
+            _rxActive = true;
+        }
+
+        digitalWrite(LED_BUILTIN, HIGH);
 
         // Actualizare instanta unghi servodirectie (Graupner C 577) pe registri Timer 1
         Steering::setAngle(_dateRadio.steering);
@@ -64,14 +83,21 @@ void loop() {
         Serial.print(" | SWR: ");
         Serial.println(_dateRadio.swRight);
     }
+    else if (_rxActive && acum - _ultimaRx > RX_TIMEOUT)
+    {
+        _rxActive = false;
+        digitalWrite(LED_BUILTIN, LOW);
+        Serial.println("[Radio] Conexiune pierduta! Niciun pachet primit.");
+    }
 
-    unsigned long acum = millis();
+    unsigned long acumSensori = acum;
 
-    if (acum - _ultimaCitire >= INTERVAL_SENZORI) {
+    if (acum - _ultimaCitire >= INTERVAL_SENZORI)
+    {
         _ultimaCitire = acum;
 
         // --- Senzori obstacole ---
-        distFata  = SenzorFata::citeste();
+        distFata = SenzorFata::citeste();
         distSpate = SenzorSpate::citeste();
         SenzorLumina::citeste();
 
@@ -83,20 +109,28 @@ void loop() {
         Serial.println(SenzorLumina::citeste());
 
         // --- Far fata: aprindere automata dupa lumina ---
-        if (SenzorLumina::esteIntuneric()) {
+        if (SenzorLumina::esteIntuneric())
+        {
             Leduri::farFataOn();
-        } else {
+        }
+        else
+        {
             Leduri::farFataOff();
         }
 
         // --- Stop spate ---
         // Prioritate: frana > lumini > stins
-        if (SenzorSpate::estePericol()) {
-            Leduri::stopFrana();           // obstacol spate -> frana automata
-        } else if (SenzorLumina::esteIntuneric()) {
-            Leduri::stopNormal();          // lumini aprinse -> stop slab (pozitie)
-        } else {
-            Leduri::stopOff();             // zi + fara frana -> stins
+        if (SenzorSpate::estePericol())
+        {
+            Leduri::stopFrana(); // obstacol spate -> frana automata
+        }
+        else if (SenzorLumina::esteIntuneric())
+        {
+            Leduri::stopNormal(); // lumini aprinse -> stop slab (pozitie)
+        }
+        else
+        {
+            Leduri::stopOff(); // zi + fara frana -> stins
         }
     }
 

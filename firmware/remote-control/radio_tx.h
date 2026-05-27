@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 // Shared payload structure representing the control packet sent to the car
+#pragma pack(1)
 struct Payload
 {
     int throttle; // 0-1023 (0 = back, 512 = center, 1023 = forward)
@@ -11,6 +12,7 @@ struct Payload
     bool swLeft;  // Left joystick button state
     bool swRight; // Right joystick button state
 };
+#pragma pack()
 
 namespace RadioTx
 {
