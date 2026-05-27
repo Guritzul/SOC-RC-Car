@@ -15,16 +15,12 @@
 #include "senzor_lumina.h"
 #include "buzzer.h"
 #include "leduri.h"
-#include "radio_rx.h"
 
 static const int INTERVAL_SENZORI = 100;
 static unsigned long _ultimaCitire = 0;
 
 static float distFata  = 999.0;
 static float distSpate = 999.0;
-
-// Starea curenta a comenzilor radio (initilizata cu pozitii neutre)
-static Payload _dateRadio = {512, 512, false, false, false};
 
 // ============================================================
 void setup() {
@@ -36,29 +32,12 @@ void setup() {
     SenzorLumina::init();
     Buzzer::init();
     Leduri::init();
-    RadioRx::init();
 
     Serial.println("=== Sistem gata ===");
 }
 
 // ============================================================
 void loop() {
-    // --- Citire Radio non-blocking (frecventa maxima de interogare) ---
-    Payload dateNoi;
-    if (RadioRx::receive(dateNoi)) {
-        _dateRadio = dateNoi;
-        Serial.print("[Radio] Pachet primit | THR: ");
-        Serial.print(_dateRadio.throttle);
-        Serial.print(" | STR: ");
-        Serial.print(_dateRadio.steering);
-        Serial.print(" | BUZ: ");
-        Serial.print(_dateRadio.buzz);
-        Serial.print(" | SWL: ");
-        Serial.print(_dateRadio.swLeft);
-        Serial.print(" | SWR: ");
-        Serial.println(_dateRadio.swRight);
-    }
-
     unsigned long acum = millis();
 
     if (acum - _ultimaCitire >= INTERVAL_SENZORI) {
@@ -94,8 +73,8 @@ void loop() {
         }
     }
 
-    // --- Buzzer non-blocking (activat de obstacole sau manual din butonul de pe telecomanda) ---
+    // --- Buzzer non-blocking ---
     bool pericol = SenzorFata::estePericol() || SenzorSpate::estePericol();
     bool atentie = SenzorFata::esteAtentie() || SenzorSpate::esteAtentie();
-    Buzzer::update(pericol || _dateRadio.buzz, atentie);
+    Buzzer::update(pericol, atentie);
 }
