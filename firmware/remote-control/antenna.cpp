@@ -9,6 +9,7 @@ void antennaInit()
     radio.begin();
     radio.openWritingPipe(address);
     radio.setPALevel(RF24_PA_LOW);
+    radio.setRetries(3, 3); // max 3 reîncercări, delay mic
     radio.stopListening();
 }
 

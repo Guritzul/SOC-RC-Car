@@ -1,6 +1,6 @@
 #pragma once
 
-#define JOY_L_PIN A0
+#define JOY_L_PIN A1
 #define JOY_L_SW 4
 
 void joystickLeftInit();
