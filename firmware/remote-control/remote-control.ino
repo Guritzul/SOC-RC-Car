@@ -43,7 +43,7 @@ void setup()
   rightJoystick.init();
   remoteBuzzer.init();
 
-  // Initialize nRF24L01 radio transmitter
+  // Initialize nRF24L01 radio transmitter using register-level SOLID driver
   RadioTx::init();
 
   Serial.println("TX Ready");
