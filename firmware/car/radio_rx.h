@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 // Structura Payload trimisa de telecomanda
+#pragma pack(1)
 struct Payload
 {
     int throttle; // 0-1023
@@ -11,6 +12,7 @@ struct Payload
     bool swLeft;
     bool swRight;
 };
+#pragma pack()
 
 namespace RadioRx
 {
