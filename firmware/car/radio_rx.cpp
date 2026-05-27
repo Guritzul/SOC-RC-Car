@@ -306,8 +306,8 @@ public:
 
 // Instanțiem modulele de nivel jos ca variabile statice
 static Atm328Spi spiDriver;
-// Pinul CE pe PB1 (Pinul Digital 9 de pe Arduino Uno/Nano)
-static Atm328Gpio cePin(&DDRB, &PORTB, PORTB1);
+// Pinul CE pe PD7 (Pinul Digital 7 de pe Arduino Uno/Nano)
+static Atm328Gpio cePin(&DDRD, &PORTD, PORTD7);
 
 // Injectăm dependențele (SPI și CE) în driverul nRF24L01
 static Nrf24RegisterDriver nrf24(spiDriver, cePin);
