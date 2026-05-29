@@ -2,12 +2,8 @@
 
 #include <stdint.h>
 #include <avr/io.h>
+#include <Arduino.h>
 
-// ============================================================
-//  HAL Abstraction Interfaces (SOLID - ISP & DIP)
-// ============================================================
-
-// Interface for general-purpose input/output (GPIO) pin control
 class IGpio
 {
 public:
@@ -19,7 +15,6 @@ public:
     virtual bool read() = 0;
 };
 
-// Interface for hardware SPI communication with external CSN management
 class ISpi
 {
 public:
@@ -30,7 +25,6 @@ public:
     virtual uint8_t transfer(uint8_t data) = 0;
 };
 
-// Interface for Analog-to-Digital Converter (ADC) readings
 class IAdc
 {
 public:
@@ -39,11 +33,6 @@ public:
     virtual uint16_t readChannel(uint8_t channel) = 0;
 };
 
-// ============================================================
-//  ATmega328P Register-Level Concrete Implementations (SOLID - LSP)
-// ============================================================
-
-// Concrete GPIO driver manipulating DDRx, PORTx, and PINx registers directly
 class Atm328Gpio : public IGpio
 {
 private:
@@ -85,110 +74,75 @@ public:
     }
 };
 
-// ============================================================
-//  Concrete SPI driver - ATmega328P hardware SPI peripheral
-//  Hardware SPI pins (fixed by silicon):
-//    MOSI -> PB3 (D11)
-//    MISO -> PB4 (D12)
-//    SCK  -> PB5 (D13)
-//    SS   -> PB2 (D10) kept HIGH to prevent slave-mode (not used as CSN here)
-//  CSN is managed externally via an IGpio instance (injected in constructor)
-//  CE   -> PD7 (D7)  - managed externally via IGpio
-//  CSN  -> PB0 (D8)  - managed externally via IGpio
-// ============================================================
+// SPI hardware pins: MOSI -> PB3 (D11), MISO -> PB4 (D12), SCK -> PB5 (D13), SS -> PB2 (D10)
+// SS is kept HIGH to prevent ATmega slave-mode transition.
 class Atm328Spi : public ISpi
 {
 private:
-    IGpio &_csn;    // External CSN pin managed via GPIO
+    IGpio &_csn;
 
 public:
     explicit Atm328Spi(IGpio &csn) : _csn(csn) {}
 
     void init() override
     {
-        // 1. Set MOSI (PB3), SCK (PB5) as OUTPUT
-        DDRB |= (1 << DDB3) | (1 << DDB5);
+        // Asteapta stabilizarea alimentarii nRF24L01 (minim 10.3ms conform datasheet)
+        delay(15);
 
-        // 2. Set MISO (PB4) as INPUT
+        DDRB |= (1 << DDB3) | (1 << DDB5);
         DDRB &= ~(1 << DDB4);
 
-        // 3. Keep SS (PB2) as OUTPUT and HIGH at all times
-        //    If SS goes LOW while in master mode, ATmega may switch to slave mode
-        //    and break the SPI peripheral. CSN is handled separately on PB0 (D8).
+        // Dacă SS coboară în LOW în modul master, perifericul SPI al ATmega se comută în mod Slave.
         DDRB |= (1 << DDB2);
-        PORTB |= (1 << PORTB2);    // SS always HIGH
+        PORTB |= (1 << PORTB2);
 
-        // 4. Configure SPI Control Register (SPCR):
-        //    - SPE = 1 (SPI Enable)
-        //    - MSTR = 1 (Master mode)
-        //    - SPI Speed: F_CPU / 4 = 4 MHz (on 16 MHz ATmega328P, SPR1/0 = 00, SPI2X = 0)
-        //    - Mode 0: CPOL = 0, CPHA = 0 (Required by nRF24L01)
-        SPCR = (1 << SPE) | (1 << MSTR);
+        // Configureaza SPCR: SPE=1, MSTR=1, Speed: F_CPU/16 = 1 MHz (pentru module clone), Mode 0
+        SPCR = (1 << SPE) | (1 << MSTR) | (1 << SPR0);
         SPSR &= ~(1 << SPI2X);
 
-        // 5. Initialize CSN pin (external, on PB0/D8) - starts HIGH (deselected)
         _csn.initOutput();
         _csn.writeHigh();
     }
 
     void select() override
     {
-        // Drive CSN (PB0/D8) LOW (active)
         _csn.writeLow();
     }
 
     void deselect() override
     {
-        // Drive CSN (PB0/D8) HIGH (inactive)
         _csn.writeHigh();
     }
 
     uint8_t transfer(uint8_t data) override
     {
-        // Load data into SPI Data Register (SPDR)
         SPDR = data;
-
-        // Wait until transmission completes (poll SPI Interrupt Flag - SPIF)
-        while (!(SPSR & (1 << SPIF)))
-        {
-            // Busy wait loop
-        }
-
-        // Return received byte
+        while (!(SPSR & (1 << SPIF))) {}
         return SPDR;
     }
 };
 
-// Concrete ADC driver utilizing ATmega328P internal ADC peripheral registers
 class Atm328Adc : public IAdc
 {
 public:
     void init() override
     {
-        // Enable ADC (ADEN = 1) and set prescaler to 128 (ADPS2:0 = 111)
-        // 16 MHz / 128 = 125 kHz ADC clock (ideal speed for 10-bit resolution)
+        // ADCSRA: ADEN=1, ADPS2:0 = 111 (Prescaler 128 -> 16 MHz / 128 = 125 kHz clock ADC)
         ADCSRA = (1 << ADEN) | (1 << ADPS2) | (1 << ADPS1) | (1 << ADPS0);
     }
 
     uint16_t readChannel(uint8_t channel) override
     {
-        // Clear existing MUX channel bits (bits 3:0 of ADMUX) and set new channel
         ADMUX = (ADMUX & 0xF0) | (channel & 0x0F);
 
-        // Use AVcc as reference (REFS0 = 1, REFS1 = 0)
+        // AVcc ca referinta
         ADMUX |= (1 << REFS0);
         ADMUX &= ~(1 << REFS1);
 
-        // Start Conversion (ADSC = 1)
         ADCSRA |= (1 << ADSC);
 
-        // Wait for conversion to finish (ADSC is cleared automatically by hardware)
-        while (ADCSRA & (1 << ADSC))
-        {
-            // Busy wait
-        }
+        while (ADCSRA & (1 << ADSC)) {}
 
-        // Return 10-bit conversion result from ADC data register
         return ADC;
     }
 };

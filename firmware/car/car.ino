@@ -1,21 +1,14 @@
-// ============================================================
-//  car.ino
-//  Masina RC - coordonator module
+// car.ino - Coordonator module Masina RC
 //
-//  Module active:
-//    - SenzorFata   (HC-SR04, Echo=D2/PD2, Trig=D3/PD3)
-//    - SenzorSpate  (HC-SR04, Echo=D4/PD4, Trig=D5/PD5)
-//    - SenzorLumina (HW-072,  AO=A0/PC0/ADC0)
-//    - Buzzer       (A3/PC3)
-//    - Leduri       (Far=A1/PC1, Stop=A2/PC2 cu PWM software)
-//    - RadioRx      (nRF24L01: MOSI=D11, MISO=D12, SCK=D13, CE=D7, CSN=D10)
-//    - Steering     (Servo directie, D9/PB1/OC1A, Timer 1)
-//    - Esc          (Motor principal, D10/PB2/OC1B, Timer 1 canal B)
-//
-//  Control:
-//    - throttle (joystick stang, 0-1023) -> ESC -> motor
-//    - steering (joystick drept, 0-1023) -> Servo directie
-// ============================================================
+// Conexiuni fizice:
+//   - SenzorFata   (HC-SR04, Echo=D2/PD2, Trig=D3/PD3)
+//   - SenzorSpate  (HC-SR04, Echo=D4/PD4, Trig=D5/PD5)
+//   - SenzorLumina (HW-072,  AO=A0/PC0/ADC0)
+//   - Buzzer       (A3/PC3)
+//   - Leduri       (Far=A1/PC1, Stop=A2/PC2 cu PWM software)
+//   - RadioRx      (nRF24L01: MOSI=D11, MISO=D12, SCK=D13, CE=D7, CSN=D10)
+//   - Steering     (Servo directie, D9/PB1/OC1A, Timer 1)
+//   - Esc          (Motor principal, D10/PB2/OC1B, Timer 1 canal B)
 
 #include "senzor_fata.h"
 #include "senzor_spate.h"
@@ -36,10 +29,8 @@ static bool _rxActive = false;
 static float distFata = 999.0;
 static float distSpate = 999.0;
 
-// Starea curenta a comenzilor radio (initializata cu pozitii neutre)
 static Payload _dateRadio = {512, 512, false, false, false};
 
-// ============================================================
 void setup()
 {
     Serial.begin(9600);
@@ -54,9 +45,7 @@ void setup()
     Leduri::init();
     RadioRx::init();
 
-    // Steering se initializeaza PRIMUL (configureaza Timer 1 complet)
-    // ESC se initializeaza AL DOILEA (adauga COM1B1 la TCCR1A existent + armare 3s)
-    // Gearbox se initializeaza al treilea (adauga TOIE1 la TIMSK1)
+    // Ordinea contează: Steering configurează Timer 1 complet; ESC activează OC1B pe el; Gearbox adaugă întreruperea OVF.
     Steering::init();
     Esc::init();
     Gearbox::init();
@@ -64,12 +53,10 @@ void setup()
     Serial.println("=== Sistem gata ===");
 }
 
-// ============================================================
 void loop()
 {
     unsigned long acum = millis();
 
-    // --- Citire Radio non-blocking (frecventa maxima de interogare) ---
     Payload dateNoi;
     if (RadioRx::receive(dateNoi))
     {
@@ -84,25 +71,20 @@ void loop()
 
         digitalWrite(LED_BUILTIN, HIGH);
 
-        // --- Servo directie: joystick drept (0-1023) -> OC1A (D9) ---
         Steering::setAngle(_dateRadio.steering);
 
-        // --- Motor (ESC): joystick stang (0-1023) -> OC1B (D10) ---
-        // Securitate: daca senzorul din fata detecteaza obstacol in zona de pericol,
-        // blocam acceleratia inainte (rawValue > 512 = inainte)
+        // Siguranta: daca senzorul fata/spate detecteaza obstacol, blocam deplasarea in directia respectiva
         int throttleCmd = _dateRadio.throttle;
         if (SenzorFata::estePericol() && throttleCmd > 512)
         {
-            throttleCmd = 512;  // fortam stop daca obstacol in fata
+            throttleCmd = 512;
         }
-        // Securitate: daca senzorul din spate detecteaza obstacol, blocam mersul inapoi
         if (SenzorSpate::estePericol() && throttleCmd < 512)
         {
-            throttleCmd = 512;  // fortam stop daca obstacol in spate
+            throttleCmd = 512;
         }
         Esc::setThrottle(throttleCmd);
 
-        // --- Schimbator de viteze (Gearbox) pe D6 ---
         static bool lastSwLeft = false;
         static bool lastSwRight = false;
 
@@ -136,16 +118,14 @@ void loop()
         digitalWrite(LED_BUILTIN, LOW);
         Serial.println("[Radio] Conexiune pierduta! Motor oprit - siguranta.");
 
-        // Siguranta: oprim motorul la pierderea semnalului radio
         Esc::stop();
-        Steering::setAngle(512);  // directie centru
+        Steering::setAngle(512);
     }
 
     if (acum - _ultimaCitire >= INTERVAL_SENZORI)
     {
         _ultimaCitire = acum;
 
-        // --- Senzori obstacole ---
         distFata = SenzorFata::citeste();
         distSpate = SenzorSpate::citeste();
         SenzorLumina::citeste();
@@ -157,37 +137,34 @@ void loop()
         Serial.print(" cm  |  LUMINA: ");
         Serial.println(SenzorLumina::citeste());
 
-        // --- Far fata: aprindere automata dupa lumina ---
         if (SenzorLumina::esteIntuneric())
         {
             Leduri::farFataOn();
         }
         else
         {
-            Leduri::farFataOff();
+            Leduri::farFataDrl();
         }
 
-        // --- Stop spate ---
-        // Prioritate: frana > lumini > stins
-        if (SenzorSpate::estePericol())
+        // Prioritate LED stop spate: obstacol spate > frână/marsarier > lumini de poziție > oprit
+        if (SenzorSpate::estePericol() || _dateRadio.throttle < 480)
         {
-            Leduri::stopFrana(); // obstacol spate -> frana automata
+            Leduri::stopFrana();
         }
         else if (SenzorLumina::esteIntuneric())
         {
-            Leduri::stopNormal(); // lumini aprinse -> stop slab (pozitie)
+            Leduri::stopNormal();
         }
         else
         {
-            Leduri::stopOff(); // zi + fara frana -> stins
+            Leduri::stopOff();
         }
     }
 
-    // --- PWM software Stop Spate (apelat cat mai des in loop) ---
     Leduri::update();
 
-    // --- Buzzer non-blocking (activat de obstacole sau manual din butonul de pe telecomanda) ---
     bool pericol = SenzorFata::estePericol() || SenzorSpate::estePericol();
     bool atentie = SenzorFata::esteAtentie() || SenzorSpate::esteAtentie();
-    Buzzer::update(pericol || _dateRadio.buzz, atentie);
+    bool marsarier = (_dateRadio.throttle < 480);
+    Buzzer::update(pericol, atentie, _dateRadio.buzz, marsarier, distSpate);
 }

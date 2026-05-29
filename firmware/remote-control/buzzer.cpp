@@ -14,7 +14,7 @@ void Buzzer::init()
 
 bool Buzzer::isButtonPressed()
 {
-    return !_buttonGpio.read(); // Button is active LOW due to pull-up
+    return !_buttonGpio.read();
 }
 
 void Buzzer::update(bool active)
@@ -23,8 +23,23 @@ void Buzzer::update(bool active)
     {
         tone(_buzzerPinNum, 1000);
     }
+    else if (_isBeepingOnce)
+    {
+        if (millis() - _beepStartTime >= 100) {
+            _isBeepingOnce = false;
+            noTone(_buzzerPinNum);
+        } else {
+            tone(_buzzerPinNum, 1500);
+        }
+    }
     else
     {
         noTone(_buzzerPinNum);
     }
+}
+
+void Buzzer::beepOnce()
+{
+    _isBeepingOnce = true;
+    _beepStartTime = millis();
 }

@@ -18,5 +18,5 @@ uint16_t Joystick::readAxis()
 
 bool Joystick::isPressed()
 {
-    return !_switchGpio.read(); // Button is active LOW due to pull-up
+    return !_switchGpio.read();
 }

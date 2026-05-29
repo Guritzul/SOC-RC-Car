@@ -1,40 +1,24 @@
-// ============================================================
-//  buzzer.cpp
-//  Alerta sonora in functie de proximitate obstacol
-//
-//  Conexiuni:
-//    (+) -> A3 (PC3)
-//    (-) -> GND
-// ============================================================
-
+// Conexiuni: (+) -> A3 (PC3), (-) -> GND
 #include <avr/io.h>
-#include "Arduino.h"    // necesar pentru tone(), noTone(), millis()
+#include "Arduino.h"
 #include "buzzer.h"
 
-// --- Pin Buzzer: A3 = PC3 = Arduino analog pin 3 ---
-// tone() / noTone() folosesc numarul pinului Arduino
-static const int PIN_BUZZER = A3;   // A3 = pin analog 3 (PC3)
+static const int PIN_BUZZER = A3;
 
-// --- Timpi pentru bip non-blocking ---
 static unsigned long _ultimulBip  = 0;
 static bool          _buzzerActiv = false;
 
-// Intervale bip (ms)
-static const int INTERVAL_PERICOL = 150;   // bip rapid
-static const int INTERVAL_ATENTIE = 500;   // bip lent
-static const int DURATA_BIP       = 100;   // cat tine un bip
+static const int INTERVAL_PERICOL = 150;
+static const int INTERVAL_ATENTIE = 500;
+static const int DURATA_BIP       = 100;
 
-// Frecvente ton
 static const int FREQ_PERICOL = 1000;
 static const int FREQ_ATENTIE = 600;
 
-// ============================================================
 namespace Buzzer {
 
     void init() {
-        // PC3 (A3) -> OUTPUT pe registri
         DDRC |= (1 << DDC3);
-        // Initial LOW (buzzer stins)
         PORTC &= ~(1 << PC3);
 
         noTone(PIN_BUZZER);
@@ -56,25 +40,38 @@ namespace Buzzer {
         tone(PIN_BUZZER, FREQ_PERICOL, DURATA_BIP);
     }
 
-    // Non-blocking: apelat o data per loop()
-    // Gestioneaza ritmul bipurilor automat
-    void update(bool pericol, bool atentie) {
-        unsigned long acum = millis();
+    void update(bool pericol, bool atentie, bool claxon, bool marsarier, float distSpate) {
+        if (claxon) {
+            tone(PIN_BUZZER, FREQ_PERICOL);
+            return;
+        }
 
-        if (!pericol && !atentie) {
+        unsigned long acum = millis();
+        int interval = 0;
+        int freq = FREQ_ATENTIE;
+
+        if (marsarier) {
+            // Asistenta parcare: frecventa creste proportional (interval scade)
+            interval = (int)distSpate * 15;
+            if (interval > 1000) interval = 1000;
+            if (interval < 150) interval = 150;
+            freq = 800; // Ton distinct pentru marsarier
+        } else if (pericol) {
+            interval = INTERVAL_PERICOL;
+            freq = FREQ_PERICOL;
+        } else if (atentie) {
+            interval = INTERVAL_ATENTIE;
+            freq = FREQ_ATENTIE;
+        }
+
+        if (interval == 0) {
             liniste();
             return;
         }
 
-        int interval = pericol ? INTERVAL_PERICOL : INTERVAL_ATENTIE;
-
         if (acum - _ultimulBip >= (unsigned long)interval) {
             _ultimulBip = acum;
-            if (pericol) {
-                bipPericol();
-            } else {
-                bipAtentie();
-            }
+            tone(PIN_BUZZER, freq, DURATA_BIP);
         }
     }
 

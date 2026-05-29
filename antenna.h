@@ -6,8 +6,8 @@
 
 struct Payload
 {
-    int throttle; // 0-1023
-    int steering; // 0-1023
+    int throttle;
+    int steering;
     bool buzz;
     bool swLeft;
     bool swRight;

@@ -3,13 +3,9 @@
 #include <avr/interrupt.h>
 #include <Arduino.h>
 
-// Variabilă globală volatilă actualizată de aplicație
-volatile uint8_t gearbox_ticks = 232; // Pornim din viteza întâi (232)
+volatile uint8_t gearbox_ticks = 230; // Pornim din viteza întâi (230)
 static Gearbox::Gear currentGear = Gearbox::GEAR_1;
 
-// ============================================================
-//  Interfață Abstractă (SOLID - ISP / DIP)
-// ============================================================
 class IGearbox
 {
 public:
@@ -21,25 +17,25 @@ public:
     virtual void shiftDown() = 0;
 };
 
-// ============================================================
-//  Implementare Concretă pe Registri ATmega328P (SOLID - LSP)
-// ============================================================
 class Atm328InterruptGearbox : public IGearbox
 {
 public:
     void init() override
     {
-        // 1. Setează pinul D6 (PD6) ca ieșire (OUTPUT)
         DDRD |= (1 << DDD6);
-
-        // 2. Asigurăm că pinul pornește pe LOW
         PORTD &= ~(1 << PORTD6);
 
-        // 3. Activăm întreruperea la Overflow pentru Timer 1 (TOIE1)
-        //    Timer 1 este deja configurat la 50Hz (20ms perioadă) de Steering::init().
+        // Mod CTC (Clear Timer on Compare Match)
+        TCCR2A = (1 << WGM21);
+        TCCR2B = 0;
+        TCNT2 = 0;
+        
+        TIMSK2 |= (1 << OCIE2A);
+
+        // Timer 1 este deja configurat la 50Hz (20ms) de Steering
         TIMSK1 |= (1 << TOIE1);
 
-        Serial.println("[Gearbox] Initializat cu succes (Soft-PWM pe D6 prin T1 OVF si nested delay)");
+        Serial.println("[Gearbox] Initializat cu succes (Timer1 OVF + Timer2 COMPA non-blocant)");
     }
 
     void setGear(Gearbox::Gear gear) override
@@ -48,16 +44,16 @@ public:
         switch (gear)
         {
             case Gearbox::GEAR_1:
-                gearbox_ticks = 232;
-                Serial.println("[Gearbox] Schimbat in treapta 1 (ticks: 232)");
+                gearbox_ticks = 230;
+                Serial.println("[Gearbox] Schimbat in treapta 1 (ticks: 230)");
                 break;
             case Gearbox::GEAR_2:
-                gearbox_ticks = 145;
-                Serial.println("[Gearbox] Schimbat in treapta 2 (ticks: 145)");
+                gearbox_ticks = 141;
+                Serial.println("[Gearbox] Schimbat in treapta 2 (ticks: 141)");
                 break;
             case Gearbox::GEAR_3:
-                gearbox_ticks = 55;
-                Serial.println("[Gearbox] Schimbat in treapta 3 (ticks: 55)");
+                gearbox_ticks = 90;
+                Serial.println("[Gearbox] Schimbat in treapta 3 (ticks: 90)");
                 break;
         }
     }
@@ -92,12 +88,8 @@ public:
     }
 };
 
-// Instanțiere statică a modulului
 static Atm328InterruptGearbox gearboxHardware;
 
-// ============================================================
-//  Namespace Public expus către aplicație
-// ============================================================
 namespace Gearbox
 {
     void init()
@@ -126,23 +118,20 @@ namespace Gearbox
     }
 }
 
-// ============================================================
-//  Rutină de Întrerupere (ISR)
-// ============================================================
-
 // Apelat la fiecare Overflow al Timer 1 (la fiecare 20 ms / 50 Hz)
 ISR(TIMER1_OVF_vect)
 {
-    // Permitem întreruperilor imbricate (nested interrupts) să ruleze în paralel.
-    // Astfel, întreruperile Timer 0 (care actualizează millis() la fiecare 1ms)
-    // pot rula fără nicio întrerupere sau întârziere în sistem.
-    sei();
+    PORTD |= (1 << PORTD6);
+    TCNT2 = 0;
+    OCR2A = gearbox_ticks;
+    
+    // Prescaler 128 (1 tick = 8 µs)
+    TCCR2B = (1 << CS22) | (1 << CS20);
+}
 
-    PORTD |= (1 << PORTD6);                // Pune pinul D6 (PD6) pe HIGH
-    
-    // Calculăm durata pulsului în microsecunde pe baza ticks (1 tick = 64 µs)
-    uint16_t delay_us = (uint16_t)gearbox_ticks * 64;
-    delayMicroseconds(delay_us);
-    
-    PORTD &= ~(1 << PORTD6);               // Pune pinul D6 (PD6) pe LOW
+// Apelat când Timer 2 atinge valoarea OCR2A
+ISR(TIMER2_COMPA_vect)
+{
+    PORTD &= ~(1 << PORTD6);
+    TCCR2B = 0;
 }

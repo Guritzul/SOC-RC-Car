@@ -1,9 +1,6 @@
 #include "steering.h"
 #include <Arduino.h>
 
-// ============================================================
-//  Interfață Abstractă (SOLID - ISP / DIP)
-// ============================================================
 class ISteering
 {
 public:
@@ -12,44 +9,26 @@ public:
     virtual void setAngle(int rawValue) = 0;
 };
 
-// ============================================================
-//  Implementare Concretă pe Registri ATmega328P (SOLID - LSP)
-// ============================================================
 class Atm328Timer1Steering : public ISteering
 {
 public:
     void init() override
     {
-        // 1. Setează pinul PB1 (Digital 9 / OC1A) ca OUTPUT (servo direcție)
-        //    PB2 (Digital 10 / OC1B) este configurat separat de Esc::init()
         DDRB |= (1 << DDB1) | (1 << DDB2);
 
-        // 2. Configurare Timer 1 (16-bit) pentru servomotor (50Hz / perioadă de 20ms):
-        //    Timer 1 este partajat între Steering (OC1A/D9) şi ESC (OC1B/D10)
-        //
-        //    - TCCR1A:
-        //        - COM1A1 = 1 (Curăță pinul OC1A la comparare egală cu OCR1A, pune pe HIGH la capătul de jos)
-        //        - COM1B1 = 1 (Activat pentru ESC pe OC1B/D10 - evită resetarea accidentală la reinit)
-        //        - WGM11  = 1 (Face parte din modul 14 - Fast PWM cu ICR1 ca TOP)
+        // Timer 1 (16-bit) configurat pentru servomotor (50Hz / 20ms perioadă):
+        // Prescaler 8 -> tact 2 MHz, adică 0.5 µs per tick.
+        // TCCR1A: COM1A1=1 (curăță OC1A la comparare), COM1B1=1 (pentru ESC pe OC1B), WGM11=1 (Fast PWM, ICR1 ca TOP)
         TCCR1A = (1 << COM1A1) | (1 << COM1B1) | (1 << WGM11);
 
-        //    - TCCR1B:
-        //        - WGM13 = 1, WGM12 = 1 (Mod 14 Fast PWM - ICR1 ca TOP)
-        //        - CS11  = 1 (Prescaler clkI/O / 8 -> Tactul Timerului = 16 MHz / 8 = 2 MHz, adică 0.5 µs per tick)
+        // TCCR1B: WGM13=1, WGM12=1 (Fast PWM), CS11=1 (Prescaler 8)
         TCCR1B = (1 << WGM13) | (1 << WGM12) | (1 << CS11);
 
-        //    - ICR1 (Valoare TOP):
-        //        - Perioada cerută de servomotor: 20 ms
-        //        - Număr tick-uri = 20 ms / 0.5 µs = 40.000 de paşi
-        //        - Setează ICR1 la 39999 (deoarece numărarea porneşte de la 0)
+        // ICR1 (TOP): 20 ms / 0.5 µs = 40.000 pași (valoare TOP 39999)
         ICR1 = 39999;
 
-        //    - OCR1A (Valoare implicită inițială pe centru / neutru):
-        //        - 1.5 ms = 1500 µs
-        //        - Număr tick-uri = 1500 µs / 0.5 µs = 3000 de paşi
+        // OCR1A (implicit centru): 1.5 ms = 1500 µs / 0.5 µs = 3000 pași
         OCR1A = 3000;
-
-        //    - OCR1B setat la neutru (ESC stop) - va fi setat definitiv de Esc::init()
         OCR1B = 3000;
 
         Serial.println("[Steering] Initializat cu succes pe registri (Timer 1 OC1A+OC1B, Pin D9/PB1, Freq=50Hz)");
@@ -57,29 +36,19 @@ public:
 
     void setAngle(int rawValue) override
     {
-        // Limitare de siguranță pentru semnal
         if (rawValue < 0) rawValue = 0;
         if (rawValue > 1023) rawValue = 1023;
 
-        // Mapare liniară precisă a intervalului [0, 1023] în [2000, 4000] tick-uri pentru OCR1A:
-        //    - 0    (Stânga maxim) -> 1.0 ms -> OCR1A = 2000
-        //    - 512  (Centru)       -> 1.5 ms -> OCR1A = 3000
-        //    - 1023 (Dreapta maxim)-> 2.0 ms -> OCR1A = 4000
-        //
+        // Mapare [0, 1023] în [2000, 4000] ticks (1.0ms - 2.0ms):
         // Formula: OCR1A = 2000 + (steering * 2000) / 1023
         uint32_t calculatedTicks = 2000 + (((uint32_t)rawValue * 2000) / 1023);
         
-        // Scriem direct în registrul de comparare OCR1A
         OCR1A = (uint16_t)calculatedTicks;
     }
 };
 
-// Instanțiere statică a modulului
 static Atm328Timer1Steering steeringHardware;
 
-// ============================================================
-//  Namespace Public expus către aplicație
-// ============================================================
 namespace Steering
 {
     void init()
